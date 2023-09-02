@@ -1,0 +1,19 @@
+# %ECSV 1.0
+# ---
+# datatype:
+# - {name: wds_identifier, datatype: string}
+# - {name: wds_rownum, datatype: float64}
+# schema: astropy-2.0
+wds_identifier wds_rownum
+00003+6557MLR 25.0
+00003+6024TDS 26.0
+00003+5651CTT 27.0
+00003+1642HJ 28.0
+00003-0654LDS 31.0
+00003-4118SKF 33.0
+00003-4417I 34.0
+00004+7305HJ 35.0
+00004+2430SKF 42.0
+00004-4711HDS 47.0
+00005+7822HEI 48.0
+00005+6713HJ 49.0
