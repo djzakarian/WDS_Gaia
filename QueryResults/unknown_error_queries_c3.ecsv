@@ -1,8 +1,0 @@
-# %ECSV 1.0
-# ---
-# datatype:
-# - {name: wds_identifier, datatype: string}
-# - {name: wds_rownum, datatype: float64}
-# schema: astropy-2.0
-wds_identifier wds_rownum
-06530+2322POU 41211.0
