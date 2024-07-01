@@ -4,43 +4,70 @@
 __author__="Daphne Zakarian, Bob Zavala" 
 __credits__=["Stephen Williams, Rachel Matson"]
 __copyright__="A work of the United States Government"
-__version__="0.1.5"
+__version__="0.3.0"
 __maintainer_="Bob Zavala"
 __email__="robert.t.zavala.civ@us.navy.mil"
 __status__="Prototype"
 
 Module contains code used for a project to match the WDS catalog against 
-the Gaia DR3 catalog. The goal is to use Gaia data to provide the astrometric 
-and photometric data to determine which entries in the WDS are true physical 
-systems and which systems or components in those systems are optical components. 
+the Gaia DR3 catalog. The goal is to use Gaia data to provide the 
+astrometric and photometric data to determine which entries in the WDS are 
+true physical systems and which systems or components in those systems 
+are optical components. 
 
-Only WDS entries with precise (arcsec) coordinates will be matched against Gaia.  
+Only WDS entries with precise (arcsec) coordinates will be matched against 
+Gaia.  
 
-Coding began in the summer of 2022 with REU student Daphne Zakarian (DZ, then an 
-undergraduate at Truman State University) working with Stephen Williams and Bob
-Zavala (BZ) at NOFS. 
+Coding began in the summer of 2022 with REU student Daphne Zakarian (DZ, 
+then an undergraduate at Truman State University) working with Stephen 
+Williams and Bob Zavala (BZ) at NOFS. 
 
 BZ undertook subsequent development to improve and develop upon DZ's work. 
 
 Module consists of:
 
-    1) gaiaTable: read in the WDS catalog and after some database preparation
-    writes out files in formats suitable for the project especially a VOTable
-    to query against Gaia DR3. 
+    1) gaiaTable: read in the WDS catalog and after some database 
+    preparation writes out files in formats suitable for the project 
+    especially a VOTable to query against Gaia DR3. 
+
+    2) mergeTables: merge the results of the WDS queries against Gaia
+    DR3 into a single output result. Combine duplicate results using 
+    an Inner Join (Union in set theory). Use Set Differences (Complement 
+    in Set Theory) to identify WDS not present in the Inner Join. 
+
+    3) PathManager: a class to share the working directory path using 
+    a path object from the pathlib.Path module. The path is a type 
+    PosixPath and is converted to a str type for file I/O.  
 
 """
 
-import pandas as pd
-from astropy.table import Table, Column, MaskedColumn
+from astropy.table import Table, Column, MaskedColumn, vstack, join, setdiff
 from astropy import units as u
 from astropy.coordinates import ICRS, SkyCoord, FK5
 from astropy.io import ascii
+from astropy.io.votable import parse_single_table
 import math
 import numpy as np
 import os
+import pandas as pd
+from pathlib import Path
+
 
 # to time task completion only
 import time
+
+class PathManager:
+    _shared_path = None
+
+    @classmethod
+    def set_path(cls, *path):
+        # cls._shared_path = Path(path)
+        cls._shared_path = Path(os.getcwd())
+
+    @classmethod
+    def get_path(cls):
+        return cls._shared_path
+
 
 def gaiaTable():
 
@@ -49,14 +76,14 @@ def gaiaTable():
     @author: Daphne Zakarian
     @author: Bob Zavala
 
-    Read in the WDS using pandas, turn into an astropy table, find secondary coords, 
-    account for proper motion, and write out the table as CSV, ECSV and a
-    VOTable. The intent is that the VOTable is used for the query against Gaia
-    and the CSV and ECSV are provided for ease of access. 
+    Read in the WDS using pandas, turn into an astropy table, find secondary 
+    coords, account for proper motion, and write out the table as CSV, ECSV 
+    and a VOTable. The intent is that the VOTable is used for the query 
+    against Gaia and the CSV and ECSV are provided for ease of access. 
 
-    Final table will be used to query Gaia -- most importantly, we have primary 
-    and secondary stars' coordinates in degrees as the WDS provides precision 
-    coordinates in sexagesimal format. 
+    Final table will be used to query Gaia -- most importantly, we have 
+    primary and secondary stars' coordinates in degrees as the WDS provides 
+    precision coordinates in sexagesimal format. 
 
     Changes began on Thu 30 May 09:08:00 MDT 2024 
     by Bob Zavala to include Discoverer and Components in order to 
@@ -67,29 +94,43 @@ def gaiaTable():
     In the current working directory the code looks for an ASCII
     copy of the WDS called: wdsweb_summ2.txt
 
-    Output:
-    Three (3) files in total saved to the current working directory.
+    Arguments: 
 
-    wdstab_new.ecsv: A CSV file with metadata 
-    wdstab_new.csv:  A CSV file, no metadata
-    wdstab_new.vot   A VOTable for the query against Gaia DR3 suitable for 
-                     use for example on the ESA Gaia data server. 
+        path_manager: instance of PathManager class with the current
+        working directory defined
+    
+    Returns:
+
+        Writes to screen to inform user of successful finish.
+
+        Error messages in case of failure.
+
+    Output:
+        Three (3) files in total saved to the current working directory.
+
+        wdstab_new.ecsv: A CSV file with metadata 
+        wdstab_new.csv:  A CSV file, no metadata
+        wdstab_new.vot   A VOTable for the query against Gaia DR3 suitable  
+                         for use for example on the ESA Gaia data server. 
 
     """
 
-
-
-    this_path = os.getcwd()
+    # create PathManager instance
+    pm = PathManager()
+    this_path = path_manager.get_path()
+    print(f"Function gaiaTable is using the path: {this_path}")
 
     # Time the code
     startTime    = time.time()
     startCpuTime = time.process_time()
 
     print('\n')
-    print('Welcome to the gaiaTable module! This takes about 5 minutes (+/-).')
+    print('Welcome to the gaiaTable module! This takes about 5 minutes '
+          '(+/-).')
     print('Starting to build the WDS tables for the Gaia queries.\n')
     print('**********')
-    print('  Any ErfaWarnings from function pmsafe are normal and appear because the WDS lacks distances.')
+    print('  Any ErfaWarnings from function pmsafe are normal and appear\n' 
+          'because the WDS lacks distances.')
     print('**********')
 
     # Read in Table: fixed width file to pandas to astropy 
@@ -105,28 +146,29 @@ def gaiaTable():
             (69,80),(80,84),(84,88),(88,93),(93,98),(98,101),
             (101,106),(107,111),(112,121),(121,130))
 
-    oldnames= ['WDS_Identifier', 'Discovr', 'Comp', 'Epoch-1', 'Epoch-2', '#', 
-            'Theta-1', 'Theta-2', 'Rho-1', 'Rho-2', 'Mag-pri', 'Mag-sec',
-            'SpecType','PMpri-RA', 'PMpri-DEC', 'PMsec-RA', 'PMsec-DEC', 'DM', 
-            'Desig', 'Note', 'WDS_RA', 'WDS_DEC']
+    oldnames= ['WDS_Identifier', 'Discovr', 'Comp', 'Epoch-1', 
+            'Epoch-2', '#', 'Theta-1', 'Theta-2', 'Rho-1', 'Rho-2', 
+            'Mag-pri', 'Mag-sec','SpecType','PMpri-RA', 'PMpri-DEC',
+            'PMsec-RA', 'PMsec-DEC', 'DM', 'Desig', 'Note', 
+            'WDS_RA', 'WDS_DEC']
 
     # read fixed width file into pandas 
         # easier to work with this fixed-width-formatted (fwf) file 
         # in pandas than astropy
-    wdspd = pd.read_fwf(this_path+"/wdsweb_summ2.txt",
-                        colspecs=columns,header=None,names=oldnames,skiprows=3)
+    wdspd = pd.read_fwf(str(this_path)+"/wdsweb_summ2.txt",
+            colspecs=columns,header=None,names=oldnames,skiprows=3)
 
     # pandas table -> astropy table
     wdstab = Table.from_pandas(wdspd)
 
     print('\n')
     print('An astropy table has been created from the WDS data.')
-    print('Converting precise WDS coordinates, and some other tasks. This takes a bit.')
+    print('Converting precise WDS coordinates, and some other tasks.' 
+         'This takes a bit.')
 
     # Establish format for RA and DEC
 
-    # make new column to store updated RA and DEC -- is there a better way to
-        # make column dtype longer so I don't have to manually type 15 spaces???
+    # make new column to store updated RA and DEC 
     wdstab['RAprideg']=0.0
     wdstab['DECprideg']=0.0
     wdstab['RAhms']='               '
@@ -150,12 +192,13 @@ def gaiaTable():
     wdstab.remove_rows(c)
 
     print('\n')
-    print('I found ',len(c),' WDS entries without precise (arcsec) coordinates.')
+    print('I found ',len(c),
+    ' WDS entries without precise (arcsec) coordinates.')
     print('These imprecise entries will be excluded from the output.\n')
 
 
-    # loop through the ra and dec of each row and make new columns for coords in 2 formats:
-        # hms/dms format and degrees
+    # loop through the ra and dec of each row and make new columns 
+    # for hms/dms format and degrees
     # setup counter for no coordinates
     noPrecise = 0
     for row in wdstab:
@@ -170,9 +213,9 @@ def gaiaTable():
             row['RAhms']= rastr
             row['DECdms']= decstr
             
-            # put the coordinates into degree form - should work with GAIA
+            # put the coordinates into degree form 
             coo = ICRS(rastr,decstr)
-            # put the new coordinates into a column with a float dtype
+            # put the new coordinates into a column with float dtype
             row['RAprideg']= coo.ra.deg
             row['DECprideg']=coo.dec.deg
         # skip rows that don't have coordinates
@@ -191,10 +234,11 @@ def gaiaTable():
     wdstab['RAsecdeg'].unit=u.deg
     wdstab['DECsecdeg'].unit=u.deg
 
-    # The for loop that the vector algorithm below replaced took 6.5 minutes 
-    # on medea to run. 
+    # The for loop that the vector algorithm below replaced took 
+    # 6.5 minutes on VM medea to run. 
 
-    pricoord=SkyCoord(wdstab[0:]['RAprideg'],wdstab[0:]['DECprideg'], frame='icrs')
+    pricoord=SkyCoord(wdstab[0:]['RAprideg'],wdstab[0:]['DECprideg'], 
+        frame='icrs')
     angle = wdstab[0:]['Theta-2']*u.deg
     sep = wdstab[0:]['Rho-2']*u.arcsec
     seccoord = pricoord.directional_offset_by(angle, sep)
@@ -206,10 +250,12 @@ def gaiaTable():
     
     # Insert some missing units into the table
     # The for loop seems necessary and takes little time
-    col_need_units = ['Epoch-1','Epoch-2','Theta-1','Theta-2','Rho-1','Rho-2','Mag-pri','Mag-sec',
+    col_need_units = ['Epoch-1','Epoch-2','Theta-1','Theta-2','Rho-1',
+                    'Rho-2','Mag-pri','Mag-sec',
                     'PMpri-RA','PMpri-DEC','PMsec-RA','PMsec-DEC']
-    units_for_cols = [u.yr,u.yr,u.deg,u.deg,u.arcsec,u.arcsec,u.mag,u.mag,u.mas/u.yr,u.mas/u.yr,
-                    u.mas/u.yr,u.mas/u.yr]
+    units_for_cols = [u.yr,u.yr,u.deg,u.deg,u.arcsec,u.arcsec,u.mag,
+                     u.mag,u.mas/u.yr,u.mas/u.yr,
+                     u.mas/u.yr,u.mas/u.yr]
     counter = 3
     for a_col in col_need_units:
         # print(a_col)
@@ -258,7 +304,6 @@ def gaiaTable():
     new_prira_col = Column(newcoord[0:].ra.deg)
     new_pridec_col = Column(newcoord[0:].dec.deg)
     # Here is how I finally entered the PM applied coordinates. 
-    # Except I still need to fix the 'nan' proper motion prepped coordinates
     wdstab['RApri-prepped'] = new_prira_col
     wdstab['DECpri-prepped'] = new_pridec_col
 
@@ -279,7 +324,8 @@ def gaiaTable():
     wdstab['DECsec-prepped'] = new_secdec_col
 
     # Insert more missing units into the table
-    col_need_units = ['RApri-prepped','DECpri-prepped','RAsec-prepped','DECsec-prepped','RAsecdeg','DECsecdeg']
+    col_need_units = ['RApri-prepped','DECpri-prepped','RAsec-prepped',
+                    'DECsec-prepped','RAsecdeg','DECsecdeg']
 
     the_unit = u.deg
 
@@ -302,9 +348,11 @@ def gaiaTable():
     # Two different ways of coding the ascii-write are 
     # shown as an example for how to write these and one is a 
     # little more concise.
-    ascii.write(wdstab, this_path+'/wdstab_new.ecsv', format='ecsv', overwrite=True)
-    wdstab.write(this_path+'/wdstab_new.csv', overwrite=True)
-    wdstab.write(this_path+'/wdstab_new.vot', format = 'votable', overwrite=True)
+    ascii.write(wdstab, str(this_path)+'/wdstab_new.ecsv', format='ecsv', 
+        overwrite=True)
+    wdstab.write(str(this_path)+'/wdstab_new.csv', overwrite=True)
+    wdstab.write(str(this_path)+'/wdstab_new.vot', format = 'votable', 
+        overwrite=True)
 
     print('\n')
     print('Tables built and written as CSV, ECSV and VOTables.\n')
@@ -315,17 +363,161 @@ def gaiaTable():
     totalElapTime = endTime - startTime
     totalCpuTime  = endCpuTime - startCpuTime
 
-    print('Elapsed time for building and writing tables: {:.3f} seconds.'.format(totalElapTime))
-    print('Elapsed CPU for building and writing tables: {:.3f} seconds.\n'.format(totalCpuTime))
+    print('Elapsed time for building and writing tables:' 
+         '{:.3f} seconds.'.format(totalElapTime))
+    print('Elapsed CPU for building and writing tables:' 
+         '{:.3f} seconds.\n'.format(totalCpuTime))
     print('Finished, thank you for using gaiaTable!')
 
     print('\n')
 
 
+def mergeTables():
+    """Merge tables after querying WDS against Gaia 
+
+    After querying the table from gaiaTable() the results are read 
+    with this function. The table used to query the Gaia server is 
+    also read with these tables. Duplicate entries are accounted for 
+    and this yields three (3) astropy tables. These are merged using 
+    astropy's vertical stacking vstack module into a single table. 
+    This table is saved in ECSV, CSV and VOTable formats. 
+    
+    Arguments:
+
+        path_manager: instance of PathManager class with the current
+        working directory defined   
+    
+    """
+    # create PathManager instance
+    this_path = PathManager.set_path()
+    this_path = PathManager.get_path()
+    # print(f"\n Function merge_tables is using the path: {this_path}")
+
+    # If wdstab still exists in memory do not read in again
+    print('\n')
+    print('**********')
+    print('   Welcome to merge_tables.')
+    print('   I will merge the results of the WDS-Gaia query.\n')
+
+    try:
+        wdstab
+
+    except NameError:
+        print("wdstab is not in memory, I will read in the file.\n")
+        # Read in the WDSTAB used to query the Gaia DR3 ESA server
+        wdstab = parse_single_table(str(this_path)+"/wdstab_new.vot")
+
+    else:
+        print('wdstab exists in memory, continuing.\n')
+
+    # Convert the wdstab VOTable instance -> astropy.table.Table 
+    wdstab_table = wdstab.to_table()    
 
 
+    print('Reading in the results from the Gaia queries. \n')
+    # Read in the query results on the primary star coordinates 
+    primary_data = parse_single_table(str(this_path)+"/WDS_DR3_primary_goodGmag.vot")
+
+    # Convert the VOTable (the TableElement) to an 
+    # astropy.table.Table instance (creation of a TableElement class) 
+    primary_table = primary_data.to_table()
+
+    # Sort the primary_table results by WDS identifier
+    primary_srttab = primary_table[np.argsort(primary_table['wdstab_new_oid'])]
+
+    # Repeat the process for the secondary star results
+    secondary_data = parse_single_table(str(this_path)+"/WDS_DR3_secondary_goodGmag.vot")
+    secondary_table = secondary_data.to_table()    
+    secondary_srttab = secondary_table[np.argsort(secondary_table['wdstab_new_oid'])]
+
+    # To avoid a warning appearing during the Inner Join operation, set 
+    # secondary_srttab.meta to the default empty dictionary
+    secondary_srttab.meta = {'': ''}
+
+    print('Query results read in sorted, merging the results now. \n')
+
+    # Make an INNER JOIN (intersection) of the primary and secondary results
+    # columns used for the INNER JOIN
+    i_join_cols = ['SOURCE_ID','WDS_Identifier','Discovr','Comp']
+    prim_second = join(primary_srttab, secondary_srttab, keys=i_join_cols, 
+        join_type='inner') 
+    # Sort on the WDS Identifier, note the join changed the column name
+    prim_second_srt = prim_second[np.argsort(prim_second['wdstab_new_oid_1'])]
+
+    print('Inner Join or Duplicated results table completed.')
+
+    # Verify that the primary and secondary star results from the 
+    # Gaia query have the same number of remove_columns
+    if len(primary_srttab.colnames) == len(secondary_srttab.colnames):
+        num_cols =  len(secondary_srttab.colnames)
+        print('Primary and Secondary tables have the same number of columns: ',num_cols)
+    else:
+        errmsg1 = 'Primary and Secondary tables DO NOT have the same number of columns.'
+        raise ValueError(errmsg1)
+    
+
+    print('Preparing tables of Set Difference results.\n ')
+    # Return the table: COMPLEMENT of primary_srttab UNION prim_second_srt
+    primary_comp = setdiff(primary_srttab, prim_second_srt, keys=i_join_cols)
+
+    # Return the table: COMPLEMENT of secondary_srttab UNION prim_second_srt
+    secondary_comp = setdiff(secondary_srttab, prim_second_srt, keys=i_join_cols)
+
+    # Rename the Gaia DR3 Inner Join columns to their original names  
+    for i in range(1, 28):
+        prim_second_srt.rename_column(prim_second_srt.colnames[i], 
+        primary_srttab.colnames[i])
+        
+    # Rename the columns from the primary input table to the INNER JOIN
+    for i in range(31, 59):
+        prim_second_srt.rename_column(prim_second_srt.colnames[i], 
+        primary_srttab.colnames[i])
+
+    # Remove the Gaia DR3 entries AND the redundant WDS columns from 
+    # the secondary table with the inner join. Then verify the colnames 
+    # are correct
+    prim_second_srt.remove_columns(prim_second_srt.colnames[59:114])
+    if secondary_comp.colnames == prim_second_srt.colnames:
+        print('Column names of Inner Join table and Complement tables match.\n')
+    else:
+        errmsg2 = 'Column name mis-match: I will not merge the tables.'
+        raise ValueError(errmsg2)
+
+    # Vertically stack the three (#) tables: the Inner Join and the two 
+    # (2) Complement tables
+    print('Vertically stacking the three tables created for the final merge. \n')
+    merge_wds_gaia = vstack([prim_second_srt, primary_comp, secondary_comp], 
+        join_type='exact')
+
+    print('Merged table produced. I will now save copies to disk.\n')
+
+    # SAVE MERGED TABLE AS ECSV and CSV and as a VOTable
+    # Two different ways of coding the ascii-write are 
+    # shown as an example for how to write these and one is a 
+    # little more concise.
+
+    ascii.write(merge_wds_gaia, str(this_path)+'/merge_wds_gaia.ecsv', 
+    format='ecsv', overwrite=True)
+    merge_wds_gaia.write(str(this_path)+'/merge_wds_gaia.csv', overwrite=True)
+
+    print('ASCII .ecsv and .csv files written, VOTable writing now.\n')
 
 
+    merge_wds_gaia.write(str(this_path)+'/merge_wds_gaia.vot', 
+    format = 'votable', overwrite=True)
 
+    print('Finished writing the VOTable.\n')
 
+    print(' Thank you for using merge_tables\n')
+    print('**********')
 
+# main part of code
+
+def main():
+    # PathManager.set_path("/path/to/directory")
+    PathManager.set_path(os.getcwd())
+    gaiaTable()
+    merge_tables()
+
+if __name__ == "__main__":
+    main()
